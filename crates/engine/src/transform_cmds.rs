@@ -445,7 +445,7 @@ fn apply_transform(
                 && let Some(c) = &mut t.cache
             {
                 let src = c.content_bounds();
-                *c = warp_surface(c, src, h, interp)?;
+                *c = warp_surface_with(c, src, h, interp, ctl)?.ok_or(EngineError::Cancelled)?;
             }
         }
         LayerContent::Shape(sh) => match affine {
@@ -1230,6 +1230,30 @@ mod tests {
         assert!((t.transform.m[0] - 2.0).abs() < 1e-9);
         // Perspective on type is refused, like Photoshop.
         assert!(s.execute("edit.transform", json!({"layer": id, "quad": [[0, 0], [10, 0], [12, 10], [-2, 10]]})).is_err());
+    }
+
+    /// #7659 review: the warp of a missing-font type layer's pixels stops when the transform is
+    /// cancelled, as a raster layer's does.
+    #[test]
+    fn a_cancelled_transform_stops_the_missing_font_pixel_warp() {
+        let mut s = session();
+        let r = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hi", "size": 20, "font": "NoSuchFamily7278"})).unwrap();
+        let id = LayerId(r["layer"].as_u64().unwrap());
+        s.edit("psd pixels", |doc, _| {
+            let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!() };
+            let mut c = Surface::new(t.cache.as_ref().unwrap().format());
+            c.fill_rect(Rect::new(20, 30, 40, 40), &[1.0, 0.0, 0.0, 1.0]);
+            t.cache = Some(c);
+            Ok(())
+        })
+        .unwrap();
+        let mut l = s.active().unwrap().doc.layer(id).unwrap().clone();
+        let a = Affine { m: [1.0, 0.0, 0.0, 1.0, 25.0, 5.0] };
+        let h = Homography([1.0, 0.0, 25.0, 0.0, 1.0, 5.0, 0.0, 0.0, 1.0]);
+        let (cancel, progress) = (|| true, |_: f32| {});
+        let ctl = Interrupt::new(&cancel, &progress);
+        let r = transform_layer_with(None, Locks::default(), &mut l, &h, Some(a), Interp::Bilinear, &ctl);
+        assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
     }
 
     /// #7278: a type layer whose font is missing keeps the pixels it shows through a transform,
