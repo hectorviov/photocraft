@@ -1232,6 +1232,32 @@ mod tests {
         assert!(s.execute("edit.transform", json!({"layer": id, "quad": [[0, 0], [10, 0], [12, 10], [-2, 10]]})).is_err());
     }
 
+    /// #7659 review: the saved type record of a missing-font layer keeps what the file wrote (its
+    /// layout and ink boxes, measured with the real font); only its transform follows.
+    #[test]
+    fn a_missing_font_type_record_keeps_its_descriptors_through_a_transform() {
+        let mut s = session();
+        let r = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hi", "size": 20, "font": "NoSuchFamily7278"})).unwrap();
+        let id = LayerId(r["layer"].as_u64().unwrap());
+        // The record a PSD brings: boxes from the real font, unlike the fallback face's.
+        s.edit("psd record", |doc, _| {
+            let dpi = doc.resolution_dpi;
+            let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!() };
+            t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::build_tysh(t, dpi, Some([-3.0, -61.0, 517.0, 19.0]))));
+            Ok(())
+        })
+        .unwrap();
+        let before = {
+            let LayerContent::Text(t) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!() };
+            photocraft_text::psd::parse_tysh(t.psd_raw.as_ref().unwrap()).unwrap()
+        };
+        s.execute("edit.transform", json!({"layer": id.0, "matrix": [1, 0, 0, 1, 25, 5]})).unwrap();
+        let LayerContent::Text(t) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("still a type layer") };
+        let after = photocraft_text::psd::parse_tysh(t.psd_raw.as_ref().unwrap()).unwrap();
+        assert_eq!(after.transform.m, t.transform.m, "the transform follows");
+        assert!(after.text == before.text && after.warp == before.warp && after.bounds == before.bounds, "the descriptors are the file's");
+    }
+
     /// #7659 review: the warp of a missing-font type layer's pixels stops when the transform is
     /// cancelled, as a raster layer's does.
     #[test]
