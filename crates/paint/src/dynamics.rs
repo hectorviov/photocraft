@@ -21,6 +21,10 @@ pub const SPEED_SPACING_MS: f64 = 8.0;
 
 /// Longest pixel-grid segment (in pixels) before falling back to distance spacing.
 const MAX_GRID_STEPS: f64 = 1e7;
+/// Cells filled in between two pixel steps that are not neighbours (a bend between segments). The
+/// gap there is a cell or two; a longer one comes from a segment that fell back to distance
+/// spacing, and is left alone.
+const MAX_GRID_BRIDGE: f64 = 4.0;
 
 /// Densest speed spacing, in pixels between dabs (a slow, long stroke never floods the buffer).
 const MIN_SPEED_STEP: f64 = 0.5;
@@ -242,6 +246,8 @@ pub struct PathWalker {
     /// Pixel-grid stepping for small aliased tips: the dab-centre offset inside a pixel (see
     /// [`PathWalker::pixel_grid`]).
     grid: Option<f64>,
+    /// The pixel cell of the last step in pixel-grid mode.
+    grid_last: Option<(f64, f64)>,
 }
 
 impl PathWalker {
@@ -258,6 +264,7 @@ impl PathWalker {
             speed: None,
             speed_acc: 0.0,
             grid: None,
+            grid_last: None,
         }
     }
 
@@ -309,6 +316,29 @@ impl PathWalker {
     }
 
     fn emit(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput)) {
+        if let Some(offset) = self.grid {
+            // Each segment steps from its own columns (or rows), so at a bend its first step can
+            // land two cells from the previous segment's last one: fill in the cells between, as
+            // a pixel line, so the stroke stays 8-connected (#9003).
+            let cell = (grid_cell(point.x, offset), grid_cell(point.y, offset));
+            if let Some((lx, ly)) = self.grid_last {
+                let (dx, dy) = (cell.0 - lx, cell.1 - ly);
+                let n = dx.abs().max(dy.abs()).round();
+                if n > 1.0 && n <= MAX_GRID_BRIDGE {
+                    for i in 1..n as u32 {
+                        let f = f64::from(i) / n;
+                        let mut q = point;
+                        (q.x, q.y) = (grid_cell(lx + dx * f, offset), grid_cell(ly + dy * f, offset));
+                        self.emit_step(q, out);
+                    }
+                }
+            }
+            self.grid_last = Some(cell);
+        }
+        self.emit_step(point, out);
+    }
+
+    fn emit_step(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput)) {
         let s = StepInput { point, direction: self.dir, initial_direction: self.initial_dir.unwrap_or(self.dir), step: self.step };
         self.step += 1;
         out(s);
