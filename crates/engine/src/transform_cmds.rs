@@ -1036,7 +1036,8 @@ mod tests {
         let c = t.cache.as_ref().unwrap();
         assert_eq!(c.content_bounds(), Rect::new(45, 35, 65, 45));
         assert!(c.pixel(55, 40)[0] > 0.99);
-        assert!(t.psd_raw.is_some());
+        let saved = photocraft_text::psd::parse_tysh(t.psd_raw.as_ref().unwrap()).unwrap().transform;
+        assert!((saved.m[4] - 35.0).abs() < 1e-9 && (saved.m[5] - 55.0).abs() < 1e-9, "the saved TySh follows: {saved:?}");
     }
 
     #[test]
