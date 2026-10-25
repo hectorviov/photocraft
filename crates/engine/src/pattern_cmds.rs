@@ -22,11 +22,14 @@ use crate::{EngineError, Result, Session};
 #[derive(Clone, Debug)]
 pub struct PatternLibrary {
     pub items: Vec<Pattern>,
+    /// Bumped when a pattern's pixels are replaced under the same id (an imported `.pat` whose
+    /// id is already in the library), which its id, name and size don't show.
+    pub pixels_rev: u64,
 }
 
 impl Default for PatternLibrary {
     fn default() -> Self {
-        PatternLibrary { items: builtin() }
+        PatternLibrary { items: builtin(), pixels_rev: 0 }
     }
 }
 
@@ -279,7 +282,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     for pat in pats {
         ids.push(pat.id.clone());
         match s.patterns.items.iter_mut().find(|q| q.id == pat.id) {
-            Some(q) => *q = pat,
+            Some(q) => {
+                *q = pat;
+                s.patterns.pixels_rev += 1;
+            }
             None => s.patterns.items.push(pat),
         }
     }

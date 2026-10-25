@@ -753,3 +753,79 @@ fn a_patterns_file_that_failed_to_load_is_not_overwritten() {
     assert_eq!(mem.files.lock().unwrap().get(PATTERNS_FILE), Some(&unreadable), "a patterns file the store could not read was overwritten");
     assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
 }
+
+/// A `.pat` of one 4×4 pattern with id `id`, filled with `rgba`.
+fn pat_bytes(id: &str, rgba: [f32; 4]) -> String {
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+    let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
+    surface.fill_rect(Rect::new(0, 0, 4, 4), &rgba);
+    let mut p = photocraft_doc::Pattern::new("Same", surface, 4, 4);
+    p.id = id.into();
+    photocraft_paint::tile::b64_encode(&photocraft_io::pattern_map::write_pat(&[p]).unwrap())
+}
+
+/// #9318 review: re-importing a pattern under the same id, name and size but with other pixels
+/// (an edited `.pat`) is written, so a restart doesn't bring the old pixels back.
+#[test]
+fn a_same_id_pattern_replacement_survives_a_restart() {
+    let mem = MemBackend::default();
+    let mut s = Session::new();
+    s.attach_preset_store(open(Box::new(mem.clone())));
+    let id = "6f1c2c1e-0000-4000-8000-000000009318";
+    s.execute("pattern.import", json!({"data": pat_bytes(id, [1.0, 0.0, 0.0, 1.0])})).unwrap();
+    s.sync_preset_store();
+    s.execute("pattern.import", json!({"data": pat_bytes(id, [0.0, 0.0, 1.0, 1.0])})).unwrap();
+    s.sync_preset_store();
+    let mut t = Session::new();
+    t.attach_preset_store(open(Box::new(mem.clone())));
+    let back = t.patterns.items.iter().find(|p| p.id == id).expect("the pattern is back");
+    let want = s.patterns.items.iter().find(|p| p.id == id).unwrap();
+    assert_eq!(back.surface, want.surface, "with the replacement's pixels, not the first import's");
+}
+
+/// A [`MemBackend`] whose removals fail while `fail` is set.
+#[derive(Clone, Default)]
+struct FlakyRemove {
+    mem: MemBackend,
+    fail: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PresetBackend for FlakyRemove {
+    fn list(&self) -> Result<Vec<(String, u64)>, String> {
+        self.mem.list()
+    }
+    fn read(&self, name: &str, max: u64) -> Result<Vec<u8>, String> {
+        self.mem.read(name, max)
+    }
+    fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        self.mem.write(name, bytes)
+    }
+    fn remove(&self, name: &str) -> Result<(), String> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(format!("{name}: busy"));
+        }
+        self.mem.remove(name)
+    }
+}
+
+/// #9318 review: deleting the last user pattern while `patterns.pat` can't be removed is
+/// warned and retried, so the deleted pattern doesn't come back after a restart.
+#[test]
+fn a_failed_patterns_removal_is_retried() {
+    let backend = FlakyRemove::default();
+    let mut s = Session::new();
+    s.attach_preset_store(open(Box::new(backend.clone())));
+    s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+    let id = s.execute("edit.definePattern", json!({"name": "Gone"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    s.sync_preset_store();
+    assert!(backend.mem.files.lock().unwrap().contains_key(PATTERNS_FILE));
+    backend.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    s.execute("pattern.delete", json!({"pattern": id})).unwrap();
+    s.sync_preset_store();
+    assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty(), "the failure is warned");
+    backend.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+    s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+    s.sync_preset_store();
+    assert!(!backend.mem.files.lock().unwrap().contains_key(PATTERNS_FILE), "the removal is retried");
+}

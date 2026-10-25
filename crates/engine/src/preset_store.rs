@@ -671,7 +671,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         index: None,
         actions_rev: 0,
         actions_skipped,
-        patterns_key: patterns_key(&patterns),
+        patterns_key: patterns_key(&patterns, 0),
         patterns_skipped,
         warnings: Vec::new(),
         cache: Mutex::new(TipCache { limit: TIP_CACHE_BYTES, ..Default::default() }),
@@ -753,14 +753,17 @@ fn load_patterns(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Opt
     }
 }
 
-/// What decides whether the user patterns need rewriting: their ids, names, sizes and order.
-fn patterns_key(patterns: &[photocraft_doc::Pattern]) -> u64 {
+/// What decides whether the user patterns need rewriting: their ids, names, sizes and order, and
+/// the library's [`pixels_rev`](crate::pattern_cmds::PatternLibrary::pixels_rev) (pixels replaced
+/// under the same id).
+fn patterns_key(patterns: &[photocraft_doc::Pattern], pixels_rev: u64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for p in patterns {
         (&p.id, &p.name, p.width, p.height).hash(&mut h);
     }
     patterns.len().hash(&mut h);
+    pixels_rev.hash(&mut h);
     h.finish()
 }
 
@@ -1130,10 +1133,10 @@ impl PresetStore {
     /// Write the user patterns (the library minus the built-ins) when they changed since the last
     /// load or write. An oversized library is warned once per change and not written. An I/O
     /// error is warned and retried on the next command.
-    pub fn sync_patterns(&mut self, library: &[photocraft_doc::Pattern]) {
+    pub fn sync_patterns(&mut self, library: &[photocraft_doc::Pattern], pixels_rev: u64) {
         let builtin: Vec<String> = crate::pattern_cmds::builtin().into_iter().map(|p| p.id).collect();
         let user: Vec<photocraft_doc::Pattern> = library.iter().filter(|p| !builtin.contains(&p.id)).cloned().collect();
-        let key = patterns_key(&user);
+        let key = patterns_key(&user, pixels_rev);
         if self.patterns_key == key {
             return;
         }
@@ -1145,6 +1148,8 @@ impl PresetStore {
         if user.is_empty() {
             if let Err(e) = self.backend.remove(PATTERNS_FILE) {
                 self.warnings.push(format!("Couldn't save patterns: {e}"));
+                // Try again after the next command.
+                self.patterns_key = key.wrapping_add(1);
             }
             return;
         }
@@ -1250,7 +1255,7 @@ impl Session {
                 }
             }
             st.sync_actions(&self.actions.list, actions_rev);
-            st.sync_patterns(&self.patterns.items);
+            st.sync_patterns(&self.patterns.items, self.patterns.pixels_rev);
         }
     }
 
