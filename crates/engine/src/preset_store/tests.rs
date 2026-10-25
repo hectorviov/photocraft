@@ -829,3 +829,23 @@ fn a_failed_patterns_removal_is_retried() {
     s.sync_preset_store();
     assert!(!backend.mem.files.lock().unwrap().contains_key(PATTERNS_FILE), "the removal is retried");
 }
+
+/// #9318 review: an imported `.pat` that replaces a built-in pattern's pixels (same id) is saved
+/// and replaces the built-in after a restart, once; untouched built-ins are still never written.
+#[test]
+fn an_imported_builtin_replacement_survives_a_restart() {
+    let mem = MemBackend::default();
+    let mut s = Session::new();
+    s.attach_preset_store(open(Box::new(mem.clone())));
+    let builtin = s.patterns.items[0].id.clone();
+    s.execute("pattern.import", json!({"data": pat_bytes(&builtin, [0.9, 0.1, 0.4, 1.0])})).unwrap();
+    s.sync_preset_store();
+    let saved = photocraft_io::pattern_map::read_pat(mem.files.lock().unwrap().get(PATTERNS_FILE).expect("written")).unwrap();
+    assert_eq!(saved.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), [builtin.as_str()], "only the replaced built-in");
+    let mut t = Session::new();
+    t.attach_preset_store(open(Box::new(mem.clone())));
+    let back: Vec<_> = t.patterns.items.iter().filter(|p| p.id == builtin).collect();
+    assert_eq!(back.len(), 1, "once");
+    let want = s.patterns.items.iter().find(|p| p.id == builtin).unwrap();
+    assert_eq!(back[0].surface, want.surface, "with the imported pixels");
+}

@@ -1134,8 +1134,8 @@ impl PresetStore {
     /// load or write. An oversized library is warned once per change and not written. An I/O
     /// error is warned and retried on the next command.
     pub fn sync_patterns(&mut self, library: &[photocraft_doc::Pattern], pixels_rev: u64) {
-        let builtin: Vec<String> = crate::pattern_cmds::builtin().into_iter().map(|p| p.id).collect();
-        let user: Vec<photocraft_doc::Pattern> = library.iter().filter(|p| !builtin.contains(&p.id)).cloned().collect();
+        let builtins = crate::pattern_cmds::builtin();
+        let user: Vec<photocraft_doc::Pattern> = library.iter().filter(|p| !crate::pattern_cmds::is_pristine_builtin(p, &builtins)).cloned().collect();
         let key = patterns_key(&user, pixels_rev);
         if self.patterns_key == key {
             return;
@@ -1189,11 +1189,15 @@ impl Session {
     /// deleted built-ins, then sync. Returns the load warnings.
     pub fn attach_preset_store(&mut self, opened: Opened) -> Vec<String> {
         let Opened { store, presets, hidden_builtins, order, mut warnings, actions: disk, patterns } = opened;
-        // Saved patterns join the library after the built-ins; a pattern defined or imported
+        // Saved patterns join the library after the built-ins, and a saved built-in (replaced by
+        // an import or renamed) takes the shipped one's place; a pattern defined or imported
         // before the store finished loading keeps its place (and the same id isn't added twice).
+        let builtins = crate::pattern_cmds::builtin();
         for p in patterns {
-            if !self.patterns.items.iter().any(|q| q.id == p.id) {
-                self.patterns.items.push(p);
+            match self.patterns.items.iter_mut().find(|q| q.id == p.id) {
+                Some(q) if crate::pattern_cmds::is_pristine_builtin(q, &builtins) => *q = p,
+                Some(_) => {}
+                None => self.patterns.items.push(p),
             }
         }
         let lib = &mut self.tools.presets;
