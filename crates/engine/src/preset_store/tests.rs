@@ -849,3 +849,24 @@ fn an_imported_builtin_replacement_survives_a_restart() {
     let want = s.patterns.items.iter().find(|p| p.id == builtin).unwrap();
     assert_eq!(back[0].surface, want.surface, "with the imported pixels");
 }
+
+/// #9318 review: a pattern imported before the store finished loading, with the id, name and
+/// size of a saved one but other pixels, wins the merge and is written, so a restart keeps it.
+#[test]
+fn an_early_same_id_import_wins_and_is_saved() {
+    let mem = MemBackend::default();
+    let id = "6f1c2c1e-0000-4000-8000-00000000e4a1";
+    let mut s = Session::new();
+    s.attach_preset_store(open(Box::new(mem.clone())));
+    s.execute("pattern.import", json!({"data": pat_bytes(id, [1.0, 0.0, 0.0, 1.0])})).unwrap();
+    s.sync_preset_store();
+    // Next start: the same pattern with other pixels arrives before the store is attached.
+    let mut t = Session::new();
+    t.execute("pattern.import", json!({"data": pat_bytes(id, [0.0, 1.0, 0.0, 1.0])})).unwrap();
+    let early = t.patterns.items.iter().find(|p| p.id == id).unwrap().surface.clone();
+    t.attach_preset_store(open(Box::new(mem.clone())));
+    t.sync_preset_store();
+    let mut u = Session::new();
+    u.attach_preset_store(open(Box::new(mem.clone())));
+    assert_eq!(u.patterns.items.iter().find(|p| p.id == id).unwrap().surface, early, "the early import's pixels were saved");
+}

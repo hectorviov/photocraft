@@ -1196,7 +1196,13 @@ impl Session {
         for p in patterns {
             match self.patterns.items.iter_mut().find(|q| q.id == p.id) {
                 Some(q) if crate::pattern_cmds::is_pristine_builtin(q, &builtins) => *q = p,
-                Some(_) => {}
+                // The earlier copy wins; other pixels than the saved ones must still be written,
+                // which its id, name and size don't show.
+                Some(q) => {
+                    if q.surface != p.surface {
+                        self.patterns.pixels_rev += 1;
+                    }
+                }
                 None => self.patterns.items.push(p),
             }
         }
