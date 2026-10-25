@@ -703,3 +703,53 @@ fn an_actions_file_that_failed_to_load_is_not_overwritten() {
     assert_eq!(mem.files.lock().unwrap().get(ACTIONS_FILE), Some(&newer), "an actions file the store could not read was overwritten");
     assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
 }
+
+/// #9317: a defined or imported pattern survives a restart, as in Photoshop; the built-in
+/// patterns are never written, and deleting the last user pattern removes the file.
+#[test]
+fn user_patterns_survive_a_restart() {
+    let dir = TempDir::new("patterns");
+    let builtin = Session::new().patterns.items.len();
+    let (mut s, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    s.execute("file.new", json!({"width": 12, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#1ea05a"})).unwrap();
+    let id = s.execute("edit.definePattern", json!({"name": "Green Tile"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    s.sync_preset_store();
+    assert!(dir.files().contains(&PATTERNS_FILE.to_string()), "{:?}", dir.files());
+    // Only the user's pattern is in the file.
+    let bytes = std::fs::read(dir.0.join(PATTERNS_FILE)).unwrap();
+    let saved = photocraft_io::pattern_map::read_pat(&bytes).unwrap();
+    assert_eq!(saved.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Green Tile"]);
+    drop(s);
+
+    let (mut t, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(t.patterns.items.len(), builtin + 1);
+    let back = t.patterns.items.iter().find(|p| p.id == id).expect("the defined pattern is back after a restart");
+    assert_eq!((back.name.as_str(), back.width, back.height), ("Green Tile", 12, 10));
+    assert_eq!(back.surface, saved[0].surface, "with its pixels");
+    // Renames are kept; deleting the last user pattern removes the file.
+    t.execute("pattern.rename", json!({"pattern": id, "name": "Moss"})).unwrap();
+    t.sync_preset_store();
+    let (u, _) = session(&dir);
+    assert!(u.patterns.items.iter().any(|p| p.id == id && p.name == "Moss"));
+    t.execute("pattern.delete", json!({"pattern": id})).unwrap();
+    t.sync_preset_store();
+    assert!(!dir.files().contains(&PATTERNS_FILE.to_string()), "{:?}", dir.files());
+}
+
+#[test]
+fn a_patterns_file_that_failed_to_load_is_not_overwritten() {
+    let mem = MemBackend::default();
+    let unreadable = b"not a pattern file".to_vec();
+    mem.files.lock().unwrap().insert(PATTERNS_FILE.into(), unreadable.clone());
+    let mut s = Session::new();
+    let w = s.attach_preset_store(open(Box::new(mem.clone())));
+    assert!(w.iter().any(|w| w.contains(PATTERNS_FILE)), "{w:?}");
+    s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+    s.execute("edit.definePattern", json!({"name": "New"})).unwrap();
+    s.sync_preset_store();
+    assert_eq!(mem.files.lock().unwrap().get(PATTERNS_FILE), Some(&unreadable), "a patterns file the store could not read was overwritten");
+    assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
+}
