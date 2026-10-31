@@ -26,6 +26,8 @@ struct Win {
     width: f32,
     time: f64,
     maximized: bool,
+    /// The display's scale (`native_pixels_per_point`); `None` is egui's 1.
+    native: Option<f32>,
 }
 
 impl Win {
@@ -34,7 +36,7 @@ impl Win {
         PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
         app.custom_titlebar = true;
-        Self { ctx, app, width, time: 0.0, maximized: false }
+        Self { ctx, app, width, time: 0.0, maximized: false, native: None }
     }
 
     fn frame(&mut self, events: Vec<Event>) -> egui::FullOutput {
@@ -47,6 +49,7 @@ impl Win {
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(self.width, 600.0))), time: Some(self.time), events, ..Default::default() };
         if let Some(v) = input.viewports.get_mut(&ViewportId::ROOT) {
             v.maximized = Some(self.maximized);
+            v.native_pixels_per_point = self.native.or(v.native_pixels_per_point);
         }
         // What `PhotocraftApp::raw_input_hook` does.
         release_after_os_resize(&self.ctx, &mut input);
@@ -513,4 +516,37 @@ fn the_macos_strip_fits_around_the_measured_traffic_lights() {
     }
     let mark = crate::brand::mark_rect(&w.ctx).expect("the brand mark is painted");
     assert!(mark.left() >= 78.0, "content starts after the lights: {mark:?}");
+}
+
+/// #2554: AppKit measures the traffic lights in window points, which are egui points only at the
+/// display's own scale. A fixed UI Scale (an absolute pixels-per-point: 100% is 1 on a 2x display)
+/// zooms egui, so the strip and its content start convert by `native_pixels_per_point /
+/// pixels_per_point`; a content start past `egui::Margin`'s `i8` still clears the lights.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_macos_strip_converts_the_measured_lights_at_any_ui_scale() {
+    // A 2x display at UI Scale Auto (200%), 100% and 250%.
+    for ppp in [2.0, 1.0, 2.5] {
+        let mut w = Win::new(1440.0);
+        w.native = Some(2.0);
+        w.ctx.set_zoom_factor(ppp / 2.0);
+        w.app.custom_titlebar = false;
+        w.app.integrated_titlebar = true;
+        // Classic 12 pt lights centred 14 pt down, the zoom button ending at 70 pt: in AppKit
+        // points, a 28 pt strip with content from 78 pt.
+        w.app.mac_titlebar = Some(crate::MacTitleBar::around_lights(70.0, 14.0, 12.0));
+        w.frame(vec![]);
+        w.frame(vec![]);
+        w.frame(vec![]);
+        assert_eq!(w.ctx.pixels_per_point(), ppp);
+        let to_egui = 2.0 / ppp;
+        let widgets = w.bar_widgets();
+        assert!(!widgets.is_empty(), "at {ppp}");
+        for r in &widgets {
+            assert!((r.center().y - 14.0 * to_egui).abs() <= 1.0, "centred on the lights at {ppp}: {r:?}");
+        }
+        let mark = crate::brand::mark_rect(&w.ctx).expect("the brand mark is painted");
+        assert!(mark.left() >= 78.0 * to_egui - 0.5, "content starts after the lights at {ppp}: {mark:?}");
+        assert!(mark.left() <= 78.0 * to_egui + 1.0, "and right after them at {ppp}: {mark:?}");
+    }
 }
