@@ -121,6 +121,8 @@ fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io
     // Re-importing a file replaces its group instead of duplicating it.
     if p.get("replace").and_then(Value::as_bool).unwrap_or(true) {
         s.tools.presets.retain(|x| x.builtin || x.group != group);
+        // Before the new names arrive: a reference to a replaced preset mustn't land on its namesake.
+        s.tools.forget_missing_presets();
     }
     let mut taken = UniqueNames::new(s.tools.presets.iter().map(|x| x.name.as_str()));
     let mut names = Vec::with_capacity(imp.presets.len());
@@ -392,6 +394,21 @@ mod tests {
             true,
         )
         .unwrap()
+    }
+
+    /// #10433 review: re-importing a file replaces its group, so another tool's saved reference
+    /// to one of the old presets is dropped before the new presets (with the same names) arrive;
+    /// Update Brush on that tool can't then overwrite the re-imported preset.
+    #[test]
+    fn a_replaced_groups_presets_are_forgotten_by_other_tools() {
+        let mut s = Session::new();
+        let data = photocraft_paint::tile::b64_encode(&abr_v2());
+        s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy"})).unwrap();
+        s.tools.tool_presets = vec![("Eraser".into(), "9 px Round".into()), ("Pencil".into(), "Hard Round".into())];
+        s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy"})).unwrap();
+        assert!(photocraft_paint::presets::find(&s.tools.presets, "9 px Round").is_some(), "re-imported under the same name");
+        let refs: Vec<_> = s.tools.tool_presets.iter().map(|(t, n)| format!("{t}:{n}")).collect();
+        assert_eq!(refs, ["Pencil:Hard Round"], "the built-in Hard Round stays; the replaced 9 px Round is forgotten");
     }
 
     #[test]
