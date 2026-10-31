@@ -229,6 +229,11 @@ fn key_owner(app: &PhotocraftApp, ctx: &egui::Context) -> (bool, usize, bool, bo
 /// US comma key) must match the character typed.
 const POSITIONAL: [Key; 2] = [Key::Period, Key::Comma];
 
+/// Does `sc` take a press of the key at `physical` by that key's position ([`POSITIONAL`])?
+fn positional_match(sc: &KeyboardShortcut, physical: Option<Key>, mods: egui::Modifiers) -> bool {
+    physical.is_some_and(|p| POSITIONAL.contains(&p) && sc.modifiers.command && sc.logical_key == p && key_matches(sc, p, mods))
+}
+
 /// Dispatch this frame's shortcut presses in the order they arrived (⌘Z then ⌘S undoes, then
 /// saves the undone state; #440), consuming each. A press matching several bindings goes to the
 /// first in table order (⇧⌘Z before ⌘Z). Stops after a shortcut that hands the keyboard to
@@ -249,9 +254,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         if editing { Vec::new() } else { crate::shortcuts::path_selection_chords(app).into_iter().filter(|(sc, _)| focus.allows(sc)).collect() };
     let command = |e: &egui::Event| match e {
         egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
-            let by_position = physical_key
-                .filter(|p| POSITIONAL.contains(p))
-                .and_then(|p| table.iter().find(|(_, sc)| sc.modifiers.command && sc.logical_key == p && key_matches(sc, p, *modifiers)));
+            let by_position = table.iter().find(|(_, sc)| positional_match(sc, *physical_key, *modifiers));
             let bound = by_position
                 .or_else(|| table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers)))
                 .map(|(id, _)| (id.clone(), *key == Key::Tab, false, None));
@@ -267,8 +270,9 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
                 .or_else(|| {
                     // A press any binding matches stays the binding's, even one this focus leaves
                     // alone, or one not written as the chord (Ctrl+Shift+Enter is ⇧⌘↩ off the Mac).
-                    let free = !all.iter().any(|(_, sc)| key_matches(sc, *key, *modifiers));
-                    let chord = chords.iter().find(|(sc, _)| free && key_matches(sc, *key, *modifiers));
+                    let takes = |sc: &KeyboardShortcut| positional_match(sc, *physical_key, *modifiers) || key_matches(sc, *key, *modifiers);
+                    let free = !all.iter().any(|(_, sc)| takes(sc));
+                    let chord = chords.iter().find(|(sc, _)| free && takes(sc));
                     chord.map(|(_, mode)| (crate::shortcuts::PATH_TO_SELECTION.to_string(), false, false, Some(*mode)))
                 })
         }

@@ -583,6 +583,33 @@ fn a_binding_matching_the_same_press_keeps_it_from_the_chord() {
     assert!((selected_area(&h) - 14000.0).abs() < 0.5, "inverted, not added to: {} px", selected_area(&h));
 }
 
+/// The chords follow the key's position as the bindings do: with Make Selection from Path on ⌘.,
+/// a German layout reports ⇧⌘. as `:`, and the press still adds the path. Type size and Snap,
+/// which would take that press, are unbound.
+#[test]
+fn chords_on_a_positional_key_follow_its_position() {
+    let mut h = harness();
+    h.state_mut().session.edit_prefs(|p| {
+        p.shortcuts.insert("path.toSelection".into(), "Cmd+.".into());
+        p.shortcuts.insert("type.increaseSize".into(), String::new());
+        p.shortcuts.insert("view.snap".into(), String::new());
+    });
+    h.state_mut().run("path.set", json!({"name": "work", "path": rect_path(80.0, 40.0, 100.0, 20.0)})).unwrap();
+    h.state_mut().run("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 60, "antiAlias": false})).unwrap();
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(2);
+    crate::shortcut_dispatch::take_log(&h.ctx);
+    let m = Modifiers { shift: true, ..command() };
+    h.event(Event::ModifiersChanged(m));
+    h.event(Event::Key { key: Key::Colon, physical_key: Some(Key::Period), pressed: true, repeat: false, modifiers: m });
+    h.event(Event::Key { key: Key::Colon, physical_key: Some(Key::Period), pressed: false, repeat: false, modifiers: m });
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+    let log: Vec<String> = crate::shortcut_dispatch::take_log(&h.ctx).into_iter().map(|(id, _)| id).collect();
+    assert_eq!(log, ["path.toSelection"]);
+    assert!((selected_area(&h) - 7200.0).abs() < 0.5, "added: {} px: {}", selected_area(&h), h.state().ui.status);
+}
+
 /// The chords run in order with the frame's other shortcuts (#440): ⌘D then ⇧⌘↩ in one frame
 /// leaves the path alone selected, and ⇧⌘↩ then ⌘D nothing. Pushed straight into the input,
 /// since `Harness::event` runs a frame per event.
