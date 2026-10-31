@@ -366,3 +366,25 @@ fn inverted_shape_effects_have_no_edge_at_the_canvas_border() {
     let lit = (12..28).map(|x| px(&d, x, 10)[0]).fold(0.0f32, f32::max);
     assert!(lit > 0.2, "the hole's top edge is lit: {lit}");
 }
+
+/// An inverted shape's vector stroke under a partial layer mask: the effect shape is the mask ×
+/// (fill ∪ stroke), the mask applied once. In the hole the fill is 0 and the stroke (at 50 %
+/// opacity) 0.5, so at a 50 % mask the layer's alpha there is 0.25, not 0.3125.
+#[test]
+fn inverted_shapes_masked_vector_stroke_is_masked_once() {
+    let mut d = Document::new("t", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
+    d.layers.clear();
+    let vs = ShapeStroke { width: 4.0, align: StrokeAlign::Outside, opacity: 0.5, paint: Fill::Solid(Color::rgb(0.0, 1.0, 0.0)), ..ShapeStroke::default() };
+    let mut l = shape(10.0, 30.0, Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), Some(vs));
+    if let LayerContent::Shape(sh) = &mut l.content {
+        sh.path.inverted = true;
+        sh.cache = Some(photocraft_vector::render_shape(sh, PixelFormat::RGBA8, Rect::new(0, 0, 40, 40)));
+    }
+    let mut m = LayerMask::reveal_all();
+    m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[0.5]);
+    l.mask = Some(m);
+    l.effects.items = vec![Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(1.0, 1.0, 1.0) }];
+    d.layers.push(l);
+    let p = px(&d, 12, 20);
+    assert!(close4(p, [0.0, 1.0, 0.0, 0.25]), "the stroke in the hole at the mask's 50 %: {p:?}");
+}
