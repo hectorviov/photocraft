@@ -112,6 +112,38 @@ fn a_centred_copy_centres_the_part_its_mask_shows() {
     assert_eq!(shown(right, Some(json!({"enabled": false}))), Rect::new(25, 20, 35, 30));
 }
 
+/// #10422 review: the centre is that of the pixels the mask shows, not of the mask's opening.
+/// A second square at x 30..34 sits outside the mask; the opening (x 0..20) also covers empty
+/// pixels right of the first square, which mustn't pull the centre right.
+#[test]
+fn a_centred_copy_ignores_empty_pixels_the_mask_reveals() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 30, "y": 6, "width": 4, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    // The shown square (x 4..14, y 6..16) lands centred on the 60×50 canvas: dx 21, dy 14.
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 55, 30));
+}
+
+/// #10422 review: a feathered mask shows pixels as far out as the compositor carries its blur
+/// (three sigmas and two pixels), so a 3 px feather on an opening at x 9 still shows x 4..9.
+#[test]
+fn a_feathered_masks_shown_part_reaches_as_far_as_its_blur() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 9, "y": 0, "width": 31, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    s.edit("feather", |d, _| {
+        d.layer_mut(paint).and_then(|l| l.mask.as_mut()).expect("mask").feather = 3.0;
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    // The whole square (x 4..14) is within the blur's reach, so it is centred as a whole.
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 35, 30));
+}
+
 #[test]
 fn a_copied_background_is_an_ordinary_layer_and_several_layers_keep_their_order() {
     let (mut s, paint) = two_docs(40, 30, 8);
