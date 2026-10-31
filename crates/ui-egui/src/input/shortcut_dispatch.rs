@@ -110,7 +110,11 @@ pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
             all.push((id.to_string(), sc));
         }
     }
-    all.sort_by_key(|(_, sc)| std::cmp::Reverse(sc.modifiers.shift as u8 + sc.modifiers.alt as u8 + sc.modifiers.command as u8));
+    // Most modifiers first, since a press may match a binding with fewer (⇧⌘Z before ⌘Z). Ctrl
+    // counts as ⌘ does: off the Mac a user's Ctrl+Shift+Enter is the same press as a default's
+    // Cmd+Shift+Enter and keeps its place ahead of it, and on the Mac ⌃⌘ sits before ⌘.
+    let weight = |m: egui::Modifiers| m.shift as u8 + m.alt as u8 + m.command as u8 + m.ctrl as u8;
+    all.sort_by_key(|(_, sc)| std::cmp::Reverse(weight(sc.modifiers)));
     all
 }
 

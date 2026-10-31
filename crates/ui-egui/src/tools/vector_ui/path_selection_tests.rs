@@ -564,23 +564,28 @@ fn shift_and_option_with_cmd_enter_combine_the_path_with_the_selection() {
 
 /// A press another command's binding takes by the dispatcher's rules stays that command's, even
 /// when the binding isn't written as the chord: Ctrl+Shift+Enter off the Mac (and ⌃⇧⌘↩ on it) is
-/// also ⇧⌘↩ to egui, whose ⌘ is Ctrl there.
+/// also ⇧⌘↩ to egui, whose ⌘ is Ctrl there. The user's binding keeps it from Add Path to
+/// Selection's default ⇧⌘↩ too. Both platforms' presses, as egui-winit reports them, on every
+/// platform: the dispatcher doesn't branch on it.
 #[test]
 fn a_binding_matching_the_same_press_keeps_it_from_the_chord() {
-    let mut h = harness();
-    let binding = if cfg!(target_os = "macos") { "Ctrl+Cmd+Shift+Enter" } else { "Ctrl+Shift+Enter" };
-    h.state_mut().session.edit_prefs(|p| {
-        p.shortcuts.insert("select.inverse".into(), binding.into());
-    });
-    h.state_mut().run("path.set", json!({"name": "work", "path": rect_path(80.0, 40.0, 100.0, 20.0)})).unwrap();
-    h.state_mut().run("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 60, "antiAlias": false})).unwrap();
-    h.state_mut().ui.tool = Tool::Brush;
-    h.run_steps(2);
-    crate::shortcut_dispatch::take_log(&h.ctx);
-    press(&mut h, Key::Enter, Modifiers { ctrl: true, shift: true, ..command() });
-    let log: Vec<String> = crate::shortcut_dispatch::take_log(&h.ctx).into_iter().map(|(id, _)| id).collect();
-    assert_eq!(log, ["select.inverse"]);
-    assert!((selected_area(&h) - 14000.0).abs() < 0.5, "inverted, not added to: {} px", selected_area(&h));
+    let mac = Modifiers { command: true, mac_cmd: true, ctrl: true, shift: true, ..Default::default() };
+    let other = Modifiers { command: true, ctrl: true, shift: true, ..Default::default() };
+    for (binding, mods) in [("Ctrl+Cmd+Shift+Enter", mac), ("Ctrl+Shift+Enter", other)] {
+        let mut h = harness();
+        h.state_mut().session.edit_prefs(|p| {
+            p.shortcuts.insert("select.inverse".into(), binding.into());
+        });
+        h.state_mut().run("path.set", json!({"name": "work", "path": rect_path(80.0, 40.0, 100.0, 20.0)})).unwrap();
+        h.state_mut().run("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 60, "antiAlias": false})).unwrap();
+        h.state_mut().ui.tool = Tool::Brush;
+        h.run_steps(2);
+        crate::shortcut_dispatch::take_log(&h.ctx);
+        press(&mut h, Key::Enter, mods);
+        let log: Vec<String> = crate::shortcut_dispatch::take_log(&h.ctx).into_iter().map(|(id, _)| id).collect();
+        assert_eq!(log, ["select.inverse"], "{binding}");
+        assert!((selected_area(&h) - 14000.0).abs() < 0.5, "{binding}: inverted, not added to: {} px", selected_area(&h));
+    }
 }
 
 /// The chords follow the key's position as the bindings do: with Make Selection from Path on ⌘.,
