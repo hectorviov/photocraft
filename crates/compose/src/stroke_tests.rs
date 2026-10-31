@@ -323,3 +323,46 @@ fn outside_stroke_on_partial_fill_raster_layer_keeps_interior_free_of_stroke() {
     let stroke_pixel = px(&d, 13, 20);
     assert!(close4(stroke_pixel, [0.0, 0.0, 1.0, 1.0]), "outside stroke must be blue: {stroke_pixel:?}");
 }
+
+/// #9048: an inverted shape fills on past the canvas, so its canvas border is no edge. With
+/// Fill 0 % and an Outside stroke inside a group with an Outer Bevel, Photoshop strokes and bevels
+/// only the hole; the canvas edges stay as the backdrop (black).
+#[test]
+fn inverted_shape_effects_have_no_edge_at_the_canvas_border() {
+    let mut d = Document::with_background("t", Size::new(40, 40), ColorMode::Rgb, SampleType::U8, Color::BLACK);
+    let mut l = shape(12.0, 28.0, Fill::Solid(Color::BLACK), None);
+    if let LayerContent::Shape(sh) = &mut l.content {
+        sh.path.inverted = true;
+        sh.cache = Some(photocraft_vector::render_shape(sh, PixelFormat::RGBA8, Rect::new(0, 0, 40, 40)));
+    }
+    l.fill_opacity = 0.0;
+    l.effects.items = vec![stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::BLACK))];
+    let mut g = Layer::group("g", vec![l]);
+    g.effects.items = vec![Effect::BevelEmboss(photocraft_doc::Bevel {
+        enabled: true,
+        style: photocraft_doc::BevelStyle::OuterBevel,
+        technique: photocraft_doc::BevelTechnique::Smooth,
+        depth: 1.5,
+        up: true,
+        size: 6.0,
+        soften: 0.0,
+        angle: 58.0,
+        altitude: 25.0,
+        use_global_light: false,
+        gloss_contour: photocraft_doc::Contour::Linear,
+        gloss_anti_alias: false,
+        highlight: FxCommon::new(BlendMode::Screen, 0.75),
+        highlight_color: Color::WHITE,
+        shadow: FxCommon::new(BlendMode::Multiply, 0.75),
+        shadow_color: Color::BLACK,
+        contour: None,
+        texture: None,
+    })];
+    d.layers.push(g);
+    for (x, y) in [(20, 1), (20, 38), (1, 20), (38, 20), (38, 38), (1, 1)] {
+        assert!(close4(px(&d, x, y), [0.0, 0.0, 0.0, 1.0]), "canvas edge ({x},{y}) lit: {:?}", px(&d, x, y));
+    }
+    // The hole's edge is still bevelled (the light comes from the upper right).
+    let lit = (12..28).map(|x| px(&d, x, 10)[0]).fold(0.0f32, f32::max);
+    assert!(lit > 0.2, "the hole's top edge is lit: {lit}");
+}
