@@ -434,3 +434,24 @@ fn alt_right_click_with_the_move_tool_reads_press_time_and_latched_alt() {
     assert!(!is_open(&h, Popup::Layers), "latched ⌥: no menu");
     assert_eq!(h.state().session.active().unwrap().active_layer, Some(color), "latched ⌥ picks the layer");
 }
+
+/// #8484: with the Move tool, ⌥ + right-click on the pasteboard opens its colour menu, also where a
+/// fill layer (which covers every point) would be hit; nothing is selected. A plain right-click
+/// there still lists the layers.
+#[test]
+fn alt_right_click_with_the_move_tool_on_the_pasteboard_opens_its_menu() {
+    let mut h = harness(Tool::Move, false, 1.0);
+    h.state_mut().run("layer.newFillLayer.solidColor", json!({"color": "#3366cc"})).unwrap();
+    let bg = h.state().session.active().unwrap().doc.layers.first().unwrap().id;
+    h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+    h.run_steps(3);
+    let at = fractional_point(&h, 1.0) + vec2(240.0, 0.0);
+    tap(&mut h, at, Modifiers::ALT, false);
+    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.pasteboard), "the pasteboard menu");
+    assert!(!is_open(&h, Popup::Layers));
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(bg), "no layer picked");
+    h.state_mut().ui.canvas_tool_menu = None;
+    h.run_steps(2);
+    tap(&mut h, at, Modifiers::NONE, false);
+    assert!(is_open(&h, Popup::Layers), "a plain right-click lists the fill layer, as before");
+}
