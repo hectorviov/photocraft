@@ -27,11 +27,19 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         10
     };
     let right = if caption_right > 0.0 { 0 } else { 10 };
+    // A large UI Scale shrinks the measured lights below what the strip's controls need (9.3 pt at
+    // 300% on a 1x display): the strip keeps its floor and its row stays on the lights, moved down
+    // only as far as a control row needs.
+    let mac_height = mac_bar.map(|b| b.height.max(MacTitleBar::MIN_HEIGHT));
+    let mac_row = mac_bar.map(|b| b.height.max(ui.spacing().interact_size.y));
     let bar = egui::Panel::top("title_bar")
-        .exact_size(mac_bar.map_or_else(|| crate::titlebar::bar_height(app, ui.ctx(), if t.pro { 32.0 } else { 38.0 }), |b| b.height))
+        .exact_size(mac_height.unwrap_or_else(|| crate::titlebar::bar_height(app, ui.ctx(), if t.pro { 32.0 } else { 38.0 })))
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left, right, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect().with_min_x(ui.max_rect().left() + mac_inset);
+            // The menus, controls and title are laid out in `row`: on macOS, centred on the lights.
+            let row = mac_row.map_or(full, |h| full.with_max_y(full.top() + h));
+            let mut mac_row_ui = mac_row.map(|_| ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect().with_max_y(row.bottom())).layout(*ui.layout())));
             // Only the free gap between the menus and the far-end controls drags the window: a
             // press on a menu title must open the menu, never move the window. The gap is last
             // frame's, as the menus are laid out after this.
@@ -61,7 +69,7 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // over them.
             let rtl = crate::direction::is_rtl();
             let mut free = (full.left(), full.right());
-            crate::direction::horizontal_centered(ui, |ui| {
+            crate::direction::horizontal_centered(mac_row_ui.as_mut().unwrap_or(&mut *ui), |ui| {
                 // The menus start beside the caption buttons at their end, if it has any.
                 if !rtl && mac_inset > 0.0 {
                     ui.add_space(mac_inset);
@@ -87,17 +95,17 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 // the menus to the bar's end, or to the caption buttons.
                 let group = if rtl {
                     let left_edge = if caption_left > 0.0 { full.left() + caption_left + 4.0 } else { full.left() };
-                    egui::Rect::from_min_max(egui::pos2(left_edge, full.top()), egui::pos2((menus_end - TITLE_GAP).max(left_edge), full.bottom()))
+                    egui::Rect::from_min_max(egui::pos2(left_edge, row.top()), egui::pos2((menus_end - TITLE_GAP).max(left_edge), row.bottom()))
                 } else {
                     let right_edge = if caption_right > 0.0 { full.right() - caption_right - 4.0 } else { full.right() };
-                    egui::Rect::from_min_max(egui::pos2((menus_end + TITLE_GAP).min(right_edge), full.top()), egui::pos2(right_edge, full.bottom()))
+                    egui::Rect::from_min_max(egui::pos2((menus_end + TITLE_GAP).min(right_edge), row.top()), egui::pos2(right_edge, row.bottom()))
                 };
                 let mut group_ui = ui.new_child(egui::UiBuilder::new().max_rect(group).layout(crate::direction::trailing()));
                 let controls_end = {
                     let ui = &mut group_ui;
                     ui.spacing_mut().item_spacing.x = 6.0;
                     // The icons keep a margin above and below them in a strip fitted to the lights.
-                    let icon = mac_bar.map_or(28.0, |b| (b.height - 6.0).min(28.0));
+                    let icon = mac_row.map_or(28.0, |h| (h - 6.0).min(28.0));
                     let mut ws = app.ui.workspace.clone();
                     let options = crate::workspace_ui::switcher_options(app);
                     let opts: Vec<(String, &str)> = options.iter().map(|(k, l)| (k.clone(), l.as_str())).collect();
@@ -146,7 +154,7 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let font = theme::medium(13.0);
             let galley = ui.painter().layout_job(title_job(&title, font.clone(), t.text_dim));
             if let Some(x) = title_x(full.center().x, free.0, free.1, galley.size().x) {
-                ui.painter().galley(egui::pos2(x, full.center().y - galley.size().y / 2.0), galley, t.text_dim);
+                ui.painter().galley(egui::pos2(x, row.center().y - galley.size().y / 2.0), galley, t.text_dim);
             } else if free.1 - free.0 > 80.0 {
                 // Too narrow for the whole name: show the start of it, elided, in the free gap
                 // next to the menus.
@@ -155,7 +163,7 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 job.wrap = egui::text::TextWrapping::truncate_at_width(avail);
                 let g = ui.painter().layout_job(job);
                 let x = if rtl { free.1 - TITLE_GAP - g.size().x } else { free.0 + TITLE_GAP };
-                ui.painter().galley(egui::pos2(x, full.center().y - g.size().y / 2.0), g, t.text_dim);
+                ui.painter().galley(egui::pos2(x, row.center().y - g.size().y / 2.0), g, t.text_dim);
             }
         });
     // A click anywhere on the bar keeps a zoom being typed (zoom_field.rs).
@@ -217,12 +225,17 @@ pub struct MacTitleBar {
 }
 
 impl MacTitleBar {
+    /// The strip's lowest height (WordCraft's): its controls keep a margin above and below them.
+    /// In AppKit points when measured, and in egui points too, where a large UI Scale converts
+    /// the lights below it.
+    pub const MIN_HEIGHT: f32 = 28.0;
+
     /// The strip for traffic lights whose right edge is `lights_right` and whose centre is
     /// `lights_centre_y` below the top of the window, `light` tall: the lights centred in it, and
     /// content the same gap after them as they keep from the top and bottom. Never lower than 28 pt.
     /// All in AppKit window points.
     pub fn around_lights(lights_right: f32, lights_centre_y: f32, light: f32) -> Self {
-        let height = (2.0 * lights_centre_y).max(28.0);
+        let height = (2.0 * lights_centre_y).max(Self::MIN_HEIGHT);
         let gap = (height - light) / 2.0;
         Self { height, content_left: (lights_right + gap).max(0.0) }
     }
