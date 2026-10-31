@@ -238,7 +238,13 @@ pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result
         drop(bands);
         return import_tiff_whole(name, bytes, page);
     }
-    tiff_to_document(name, bands.upright(), crate::memory::available, BAND_BYTES)
+    let mut r = tiff_to_document(name, bands.upright(), crate::memory::available, BAND_BYTES)?;
+    // A 1-bit black-and-white TIFF opens in Bitmap mode, as in Photoshop (#10480); like a
+    // Bitmap PSD, its pixels are kept as gray.
+    if r.document.mode == ColorMode::Grayscale && tiff_is_bilevel(bytes, page) {
+        r.document.mode = ColorMode::Bitmap;
+    }
+    Ok(r)
 }
 
 /// A layered TIFF, or a flat one with extra samples, decoded whole: the layers are built from the
@@ -258,13 +264,7 @@ fn import_tiff_whole(name: &str, bytes: &[u8], page: Option<usize>) -> Result<Im
         }
         return Ok(r);
     }
-    let mut r = image_to_document(name, &img.oriented(orientation)?)?;
-    // A 1-bit black-and-white TIFF opens in Bitmap mode, as in Photoshop (#10480); like a
-    // Bitmap PSD, its pixels are kept as gray.
-    if r.document.mode == ColorMode::Grayscale && tiff_is_bilevel(bytes, page) {
-        r.document.mode = ColorMode::Bitmap;
-    }
-    Ok(r)
+    image_to_document(name, &img.oriented(orientation)?)
 }
 
 /// Whether the TIFF page that opens (`page`, else the default one) is bilevel: one 1-bit sample
