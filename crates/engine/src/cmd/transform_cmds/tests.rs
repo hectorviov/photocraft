@@ -907,3 +907,33 @@ fn a_stroked_soft_shapes_frame_matches_the_hard_shapes() {
         assert_eq!(boxes(&s), hard, "{align} at {x}: Feather alone leaves the frame");
     }
 }
+
+/// #10461: Free Transform of a selection loaded from the layer's own transparency moves the whole
+/// soft edge, as Photoshop 2025 does (a scripted Free Transform of an antialiased disc moved 60 px
+/// leaves nothing behind). It lifted alpha × selection, so a half-transparent edge pixel moved a
+/// quarter and left a quarter: a ring of up to 64 levels where the shape was.
+#[test]
+fn transforming_a_layers_own_transparency_leaves_no_fringe() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 200, "background": "transparent"})).unwrap();
+    s.execute("select.rect", json!({"x": 50, "y": 50, "width": 60, "height": 60, "ellipse": true, "antiAlias": true})).unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#000000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let alpha = |s: &Session, x: i32, y: i32| {
+        let st = s.active().unwrap();
+        *st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(x, y).last().unwrap()
+    };
+    let soft: Vec<(i32, i32)> = (40..120).flat_map(|y| (40..120).map(move |x| (x, y))).filter(|&(x, y)| (0.05..0.95).contains(&alpha(&s, x, y))).collect();
+    assert!(soft.len() > 50, "the disc has a soft edge");
+    let before: Vec<f32> = soft.iter().map(|&(x, y)| alpha(&s, x, y)).collect();
+    s.execute("select.loadSelection", json!({"channel": "transparency"})).unwrap();
+    s.execute("edit.transform", json!({"dx": 60, "dy": 0})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    for (&(x, y), a) in soft.iter().zip(&before) {
+        // Nothing stays where the disc was (its old place doesn't overlap the moved disc's edge).
+        if x < 105 {
+            assert!(alpha(&s, x, y) < 1e-3, "({x}, {y}) kept {} of {a}", alpha(&s, x, y));
+        }
+        assert!((alpha(&s, x + 60, y) - a).abs() < 1e-3, "({}, {y}) moved {} of {a}", x + 60, alpha(&s, x + 60, y));
+    }
+}
