@@ -67,8 +67,11 @@ fn clouds_value(x: f32, y: f32, base: f32, seed: u32, period: (Option<f32>, Opti
     ((sum / norm - 0.5) * 2.2 + 0.5).clamp(0.0, 1.0)
 }
 
-/// The period Clouds repeat with along an axis of `size` pixels: the size itself when it is a
+/// The period Clouds may repeat with along an axis of `size` pixels: the size itself when it is a
 /// power of two, as Photoshop's Clouds tile seamlessly at 256 × 256 but not at 300 × 200 (#8999).
+/// An octave only wraps when the axis holds a whole number of its lattice cells, and the noise
+/// scale follows the longer side, so in practice both sides must be powers of two: 256 × 300
+/// doesn't tile along x either (Photoshop's behaviour at mixed sizes is unmeasured).
 fn tile_period(size: u32) -> Option<f32> {
     (size >= 2 && size.is_power_of_two()).then_some(size as f32)
 }
