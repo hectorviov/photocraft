@@ -45,10 +45,19 @@ fn clouds_value(x: f32, y: f32, base: f32, seed: u32, period: (Option<f32>, Opti
         let (sx, sy) = (tx * tx * (3.0 - 2.0 * tx), ty * ty * (3.0 - 2.0 * ty));
         let s = seed.wrapping_add(o * 7919);
         let (wx, wy) = (wrap_cells(period.0, freq), wrap_cells(period.1, freq));
-        let wrap = |i: i32, n: Option<i32>| n.map_or(i, |n| i.rem_euclid(n));
-        let h = |a: i32, b: i32| cloud_hash(wrap(a, wx), wrap(b, wy), s);
-        let top = h(ix, iy) + (h(ix + 1, iy) - h(ix, iy)) * sx;
-        let bot = h(ix, iy + 1) + (h(ix + 1, iy + 1) - h(ix, iy + 1)) * sx;
+        // The cell's two lattice lines on an axis, wrapped once per octave where it tiles.
+        let lines = |i: i32, n: Option<i32>| match n {
+            Some(n) => {
+                let a = i.rem_euclid(n);
+                (a, if a + 1 == n { 0 } else { a + 1 })
+            }
+            None => (i, i + 1),
+        };
+        let ((x0, x1), (y0, y1)) = (lines(ix, wx), lines(iy, wy));
+        let (h00, h10) = (cloud_hash(x0, y0, s), cloud_hash(x1, y0, s));
+        let (h01, h11) = (cloud_hash(x0, y1, s), cloud_hash(x1, y1, s));
+        let top = h00 + (h10 - h00) * sx;
+        let bot = h01 + (h11 - h01) * sx;
         sum += (top + (bot - top) * sy) * amp;
         norm += amp;
         amp *= 0.5;
