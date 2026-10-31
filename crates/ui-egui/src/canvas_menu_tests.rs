@@ -401,3 +401,36 @@ fn alt_right_click_with_the_move_tool_selects_the_layer_under_the_pointer() {
     tap(&mut h, at, Modifiers::NONE, false);
     assert!(is_open(&h, Popup::Layers), "a plain right-click opens the layer menu");
 }
+
+/// #8484: the ⌥ that decides ⌥ + right-click is the one held when the button went down (egui
+/// reports the click on release, after ⌥ may be up) or latched in the Modifier Keys panel.
+#[test]
+fn alt_right_click_with_the_move_tool_reads_press_time_and_latched_alt() {
+    let mut h = harness(Tool::Move, false, 1.0);
+    let color = h.state().session.active().unwrap().active_layer.unwrap();
+    let bg = h.state().session.active().unwrap().doc.layers.first().unwrap().id;
+    let at = fractional_point(&h, 1.0);
+    let select_bg = |h: &mut Harness<'_, PhotocraftApp>| {
+        h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+        h.run_steps(2);
+    };
+    // ⌥ goes up in a frame of its own while the right button is still down.
+    select_bg(&mut h);
+    h.event(Event::ModifiersChanged(Modifiers::ALT));
+    h.event(Event::PointerMoved(at));
+    h.run_steps(2);
+    press(&mut h, at, PointerButton::Secondary, true, Modifiers::ALT);
+    h.run_steps(1);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
+    press(&mut h, at, PointerButton::Secondary, false, Modifiers::NONE);
+    h.run_steps(3);
+    assert!(!is_open(&h, Popup::Layers), "⌥ at the press: no menu");
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(color), "⌥ at the press picks the layer");
+    // ⌥ latched in the Modifier Keys panel, no key held.
+    select_bg(&mut h);
+    h.state_mut().ui.shell.sticky_alt = true;
+    tap(&mut h, at, Modifiers::NONE, false);
+    assert!(!is_open(&h, Popup::Layers), "latched ⌥: no menu");
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(color), "latched ⌥ picks the layer");
+}
