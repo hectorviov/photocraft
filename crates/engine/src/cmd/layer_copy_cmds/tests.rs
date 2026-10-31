@@ -88,6 +88,30 @@ fn places_the_copies_centred_on_the_canvas_on_a_point_or_offset() {
     assert_eq!(doc(&s, 1).layers.len(), 4);
 }
 
+/// #9681: like Photoshop's Paste, a centred copy centres what the layer mask shows, not the hidden
+/// pixels under it. The 10×10 square at x 4..14 keeps x ≥ 9 (or x < 7) visible.
+#[test]
+fn a_centred_copy_centres_the_part_its_mask_shows() {
+    let shown = |keep: Value, mask: Option<Value>| {
+        let (mut s, paint) = two_docs(40, 30, 8);
+        s.execute("select.rect", keep).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+        if let Some(m) = mask {
+            s.execute("layer.layerMask.enabled", m).unwrap();
+        }
+        let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+        bounds(&s, 1, copied(&r))
+    };
+    let right = json!({"x": 9, "y": 0, "width": 31, "height": 30, "antiAlias": false});
+    // Visible x 9..14 (5 px) centred on the 60-wide canvas: 27.5..32.5, rounded to 28..33.
+    assert_eq!(shown(right.clone(), None), Rect::new(23, 20, 33, 30), "the unmasked square sits 5 px left of its visible part");
+    let left = json!({"x": 0, "y": 0, "width": 7, "height": 30, "antiAlias": false});
+    // Visible x 4..7 (3 px) centred: 28.5..31.5, rounded to 29..32.
+    assert_eq!(shown(left, None), Rect::new(29, 20, 39, 30));
+    // A disabled mask hides nothing, so the whole square is centred.
+    assert_eq!(shown(right, Some(json!({"enabled": false}))), Rect::new(25, 20, 35, 30));
+}
+
 #[test]
 fn a_copied_background_is_an_ordinary_layer_and_several_layers_keep_their_order() {
     let (mut s, paint) = two_docs(40, 30, 8);

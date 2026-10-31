@@ -59,6 +59,31 @@ fn center(r: Rect) -> [f64; 2] {
     [(f64::from(r.x0) + f64::from(r.x1)) / 2.0, (f64::from(r.y0) + f64::from(r.y1)) / 2.0]
 }
 
+/// The part of `l`'s pixels its layer masks show: what Photoshop centres a pasted layer on (#9681).
+/// An enabled, fully dense mask crops the layer's (or group's) bounds to where it reveals anything;
+/// a disabled one, or one below 100 % density, hides nothing completely and crops nothing.
+fn shown_bounds(l: &Layer) -> Option<Rect> {
+    let r = match &l.content {
+        LayerContent::Group(g) => g.children.iter().filter_map(shown_bounds).fold(Rect::EMPTY, |a, b| a.union(&b)),
+        _ => crate::layer_multi_cmds::layer_bounds(l)?,
+    };
+    let r = match l.mask.as_ref().filter(|m| m.enabled && m.density >= 1.0) {
+        Some(m) => {
+            let (w, vals) = (r.width() as usize, m.surface.read_region(r));
+            let mut shown = Rect::EMPTY;
+            for (i, _) in vals.iter().enumerate().filter(|(_, v)| **v > 0.0) {
+                let (x, y) = (r.x0.saturating_add((i % w.max(1)) as i32), r.y0.saturating_add((i / w.max(1)) as i32));
+                shown = shown.union(&Rect::new(x, y, x.saturating_add(1), y.saturating_add(1)));
+            }
+            // A feathered edge reveals a little past the mask's own pixels.
+            let grow = m.feather.max(0.0).ceil().min(1000.0) as i32;
+            if shown.is_empty() { shown } else { shown.inflate(grow).intersect(&r) }
+        }
+        None => r,
+    };
+    (!r.is_empty()).then_some(r)
+}
+
 /// Restore missing shape caches, or refresh every shape for a changed canvas, including groups.
 fn prepare_shapes(layers: &mut [Layer], doc: &Document, new_canvas: bool) {
     for layer in layers {
@@ -197,7 +222,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     // Measure in source space: destination refresh may clip a shape before it is moved.
     // Missing caches must participate too, including shapes nested inside groups.
     prepare_shapes(&mut copies.layers, &sdoc, false);
-    let bounds = copies.layers.iter().filter_map(crate::layer_multi_cmds::layer_bounds).fold(Rect::EMPTY, |a, b| a.union(&b));
+    let bounds = copies.layers.iter().filter_map(shown_bounds).fold(Rect::EMPTY, |a, b| a.union(&b));
     let content = if bounds.is_empty() { sdoc.bounds() } else { bounds };
     adapt_copies(s, &mut copies, &ddoc)?;
     // Placement: centred on the destination's canvas, centred on a point, or offset from where
