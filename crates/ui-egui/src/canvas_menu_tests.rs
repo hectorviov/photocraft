@@ -379,3 +379,25 @@ fn brush_preset_menu_action_outside_the_picker_keeps_it_open() {
     assert!(h.state().ui.brush_picker_list.renaming.is_none());
     assert!(document_state(&h) == before, "pixels, selection, layers and history are unchanged");
 }
+
+/// #8484: with the Move tool, ⌥ + right-click selects the topmost layer under the pointer at
+/// once, without the layer menu, also inside a group with Auto-Select on Group (Photoshop).
+/// A plain right-click still opens the menu.
+#[test]
+fn alt_right_click_with_the_move_tool_selects_the_layer_under_the_pointer() {
+    let mut h = harness(Tool::Move, false, 1.0);
+    let color = h.state().session.active().unwrap().active_layer.unwrap();
+    h.state_mut().run("layer.groupLayers", json!({"name": "Grp"})).unwrap();
+    h.state_mut().ui.tool_options.move_target = "group".into();
+    let bg = h.state().session.active().unwrap().doc.layers.first().unwrap().id;
+    h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+    h.run_steps(3);
+    let at = fractional_point(&h, 1.0);
+    tap(&mut h, at, Modifiers::ALT, false);
+    assert!(!is_open(&h, Popup::Layers), "no menu with ⌥");
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(color), "the layer itself, not its group");
+    h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+    h.run_steps(2);
+    tap(&mut h, at, Modifiers::NONE, false);
+    assert!(is_open(&h, Popup::Layers), "a plain right-click opens the layer menu");
+}
