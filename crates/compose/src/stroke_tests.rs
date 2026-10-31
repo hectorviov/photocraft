@@ -388,3 +388,30 @@ fn inverted_shapes_masked_vector_stroke_is_masked_once() {
     let p = px(&d, 12, 20);
     assert!(close4(p, [0.0, 1.0, 0.0, 0.25]), "the stroke in the hole at the mask's 50 %: {p:?}");
 }
+
+/// An inverted shape's hole that crosses the canvas border, at a Density below 100 %: past the
+/// canvas the fill's coverage is as soft as inside it, so the border isn't an edge of the hole.
+/// At 0 % the fill covers the hole too: no Inside stroke anywhere; at 25 % the border of the hole
+/// is stroked as the rest of it.
+#[test]
+fn soft_inverted_shapes_hole_has_no_edge_at_the_canvas_border() {
+    for density in [0.0f32, 0.25] {
+        let mut d = Document::with_background("t", Size::new(40, 40), ColorMode::Rgb, SampleType::U8, Color::BLACK);
+        let mut path = Path::new(vec![Subpath::polygon(&[(12.0, -20.0), (28.0, -20.0), (28.0, 20.0), (12.0, 20.0)])]);
+        path.inverted = true;
+        let mut sh = ShapeLayer { path, fill: Some(Fill::Solid(Color::BLACK)), density, ..ShapeLayer::default() };
+        sh.cache = Some(photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, Rect::new(0, 0, 40, 40)));
+        let mut l = Layer::new("shape", LayerContent::Shape(sh));
+        l.fill_opacity = 0.0;
+        l.effects.items = vec![stroke(4.0, StrokePosition::Inside, FxPaint::Color(Color::WHITE))];
+        d.layers.push(l);
+        let deep = px(&d, 20, 10);
+        for y in [0, 1, 2] {
+            let p = px(&d, 20, y);
+            assert!(close4(p, deep), "density {density}: border pixel (20,{y}) {p:?} vs (20,10) {deep:?}");
+        }
+        if density == 0.0 {
+            assert!(close4(deep, [0.0, 0.0, 0.0, 1.0]), "density 0 covers the hole: {deep:?}");
+        }
+    }
+}

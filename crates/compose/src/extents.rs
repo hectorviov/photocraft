@@ -145,21 +145,22 @@ pub(crate) fn fills_past_canvas(layer: &Layer) -> bool {
 }
 
 /// An inverted shape's fill runs on past the canvas, where its cached pixels stop: there its
-/// effects take the path's own coverage, so the canvas edge isn't an edge of the shape. Without
-/// this an Outside stroke ran along the canvas border, and a group's Outer Bevel lit it (#9048);
-/// Photoshop strokes only the hole.
+/// effects take the path's own coverage (at the shape's Density, as the fill is drawn inside), so
+/// the canvas edge isn't an edge of the shape. Without this an Outside stroke ran along the canvas
+/// border, and a group's Outer Bevel lit it (#9048); Photoshop strokes only the hole.
 fn fill_past_canvas(layer: &Layer, rect: Rect, cx: &Ctx, a: &mut [f32]) {
     let LayerContent::Shape(sh) = &layer.content else { return };
     if !fills_past_canvas(layer) || cx.canvas.contains_rect(&rect) {
         return;
     }
     let cov = photocraft_vector::path_coverage(&sh.path, rect);
+    let density = if sh.density.is_finite() { sh.density.clamp(0.0, 1.0) } else { 1.0 };
     let mv = mask_vals(layer, rect, cx);
     let w = rect.width() as usize;
     for (i, v) in a.iter_mut().enumerate() {
         let (x, y) = (rect.x0.saturating_add((i % w.max(1)) as i32), rect.y0.saturating_add((i / w.max(1)) as i32));
         if !(cx.canvas.x0..cx.canvas.x1).contains(&x) || !(cx.canvas.y0..cx.canvas.y1).contains(&y) {
-            *v = cov.get(i).copied().unwrap_or(0.0) * mask_k(&mv, i);
+            *v = (1.0 - density * (1.0 - cov.get(i).copied().unwrap_or(0.0))) * mask_k(&mv, i);
         }
     }
 }
