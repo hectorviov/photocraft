@@ -13,7 +13,11 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let system = system_title_bar(app);
     // The caption buttons' room at each end (`titlebar`); a side with buttons has no margin.
     let (caption_left, caption_right) = crate::titlebar::reserved(app, ui.ctx());
-    let left = if cfg!(target_os = "macos") && app.integrated_titlebar {
+    // macOS: the strip fits around the traffic lights where AppKit measured them (#2554).
+    let mac_bar = app.mac_titlebar.filter(|_| cfg!(target_os = "macos") && app.integrated_titlebar);
+    let left = if let Some(bar) = mac_bar {
+        bar.content_left as i8
+    } else if cfg!(target_os = "macos") && app.integrated_titlebar {
         78
     } else if caption_left > 0.0 {
         0
@@ -22,7 +26,7 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     };
     let right = if caption_right > 0.0 { 0 } else { 10 };
     let bar = egui::Panel::top("title_bar")
-        .exact_size(crate::titlebar::bar_height(app, ui.ctx(), if t.pro { 32.0 } else { 38.0 }))
+        .exact_size(mac_bar.map_or_else(|| crate::titlebar::bar_height(app, ui.ctx(), if t.pro { 32.0 } else { 38.0 }), |b| b.height))
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left, right, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
@@ -87,6 +91,8 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let controls_end = {
                     let ui = &mut group_ui;
                     ui.spacing_mut().item_spacing.x = 6.0;
+                    // The icons keep a margin above and below them in a strip fitted to the lights.
+                    let icon = mac_bar.map_or(28.0, |b| (b.height - 6.0).min(28.0));
                     let mut ws = app.ui.workspace.clone();
                     let options = crate::workspace_ui::switcher_options(app);
                     let opts: Vec<(String, &str)> = options.iter().map(|(k, l)| (k.clone(), l.as_str())).collect();
@@ -107,7 +113,7 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         crate::menus::apply_workspace(app);
                     }
                     if icons_shown >= 1
-                        && icons::button(ui, "search", 28.0, app.ui.palette_open, &crate::shortcuts::tip_label(app, "Search commands", "edit.search")).clicked()
+                        && icons::button(ui, "search", icon, app.ui.palette_open, &crate::shortcuts::tip_label(app, "Search commands", "edit.search")).clicked()
                     {
                         app.ui.palette_open = !app.ui.palette_open;
                     }
@@ -118,7 +124,7 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     };
                     let appearance_tip = format!("{}: {}", tl!("Appearance Mode"), appearance_label);
                     if icons_shown >= 2 {
-                        let button = icons::button(ui, theme_icon, 28.0, false, &appearance_tip);
+                        let button = icons::button(ui, theme_icon, icon, false, &appearance_tip);
                         if button.clicked() {
                             crate::prefs_ui::cycle_appearance(app, ui.ctx());
                         }
@@ -195,6 +201,28 @@ pub(crate) fn title_job(title: &str, font: egui::FontId, color: egui::Color32) -
 /// Minimum space kept between the window title and the menus or controls beside it.
 const TITLE_GAP: f32 = 16.0;
 
+/// The macOS title strip around the traffic lights: its height and where its content starts after
+/// them. AppKit draws the lights itself and their size and place change between macOS versions
+/// (larger and lower from macOS 26), so the shell measures the real buttons (`traffic_lights.rs`)
+/// rather than assuming one layout (#2554, as WordCraft's #1559).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MacTitleBar {
+    pub height: f32,
+    pub content_left: f32,
+}
+
+impl MacTitleBar {
+    /// The strip for traffic lights whose right edge is `lights_right` and whose centre is
+    /// `lights_centre_y` below the top of the window, `light` tall: the lights centred in it, and
+    /// content the same gap after them as they keep from the top and bottom. Never lower than 28 pt.
+    pub fn around_lights(lights_right: f32, lights_centre_y: f32, light: f32) -> Self {
+        let height = (2.0 * lights_centre_y).max(28.0);
+        let gap = (height - light) / 2.0;
+        // `egui::Margin` is in `i8`.
+        Self { height, content_left: (lights_right + gap).clamp(0.0, f32::from(i8::MAX)) }
+    }
+}
+
 /// The workspace switcher's narrowest width, and one 28 pt title-bar icon with its spacing.
 const WORKSPACE_MIN: f32 = 90.0;
 
@@ -212,4 +240,24 @@ pub(super) fn title_x(center: f32, left: f32, right: f32, width: f32) -> Option<
         return Some(lo);
     }
     Some((center - width / 2.0).clamp(lo, hi))
+}
+
+#[cfg(test)]
+mod mac_title_bar_tests {
+    use super::MacTitleBar;
+
+    /// #2554: the strip is as tall as the measured lights need to sit centred in it, and its
+    /// content starts the same gap after them; never lower than 28 pt.
+    #[test]
+    fn the_strip_fits_around_the_measured_lights() {
+        // macOS 26+: 14 pt lights centred 16 pt down, the zoom button ending at 80 pt.
+        let bar = MacTitleBar::around_lights(80.0, 16.0, 14.0);
+        assert_eq!(bar.height, 32.0);
+        assert_eq!(bar.content_left, 89.0, "the gap after the lights equals the gap above them");
+        // The classic 12 pt lights centred 14 pt down: a 28 pt strip.
+        assert_eq!(MacTitleBar::around_lights(70.0, 14.0, 12.0), MacTitleBar { height: 28.0, content_left: 78.0 });
+        // Never lower than 28 pt, and the content start fits `egui::Margin`.
+        assert_eq!(MacTitleBar::around_lights(40.0, 10.0, 12.0).height, 28.0);
+        assert_eq!(MacTitleBar::around_lights(400.0, 16.0, 14.0).content_left, 127.0);
+    }
 }

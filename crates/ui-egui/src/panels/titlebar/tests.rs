@@ -489,3 +489,28 @@ fn theme_icons_are_cached_and_fall_back() {
     out.textures_delta.clear();
     assert_eq!(calls.load(Ordering::Relaxed), 3, "each icon and size rendered once; absurd sizes never");
 }
+
+/// #2554: on macOS the strip fits around the traffic lights where AppKit measured them: its
+/// controls are centred on the lights and short enough to keep a margin, and its content starts
+/// after them. The strip was 32 pt (38 outside Pro) with 28 pt icons, so the lights sat high.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_macos_strip_fits_around_the_measured_traffic_lights() {
+    let mut w = Win::new(1440.0);
+    w.app.custom_titlebar = false;
+    w.app.integrated_titlebar = true;
+    // Classic 12 pt lights centred 14 pt down, the zoom button ending at 70 pt.
+    w.app.mac_titlebar = Some(crate::MacTitleBar::around_lights(70.0, 14.0, 12.0));
+    w.frame(vec![]);
+    w.frame(vec![]);
+    let widgets = w.bar_widgets();
+    assert!(!widgets.is_empty());
+    for r in &widgets {
+        assert!((r.center().y - 14.0).abs() <= 1.0, "centred on the lights: {r:?}");
+        // The icons are 22 pt; the menu titles this rig draws in the strip (a real macOS build has
+        // them in the system menu bar) 24.
+        assert!(r.height() <= 24.0, "a margin above and below: {r:?}");
+    }
+    let mark = crate::brand::mark_rect(&w.ctx).expect("the brand mark is painted");
+    assert!(mark.left() >= 78.0, "content starts after the lights: {mark:?}");
+}
