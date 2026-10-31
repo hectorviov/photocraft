@@ -144,6 +144,24 @@ fn a_feathered_masks_shown_part_reaches_as_far_as_its_blur() {
     assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 35, 30));
 }
 
+/// #10422 review: a feathered opening that starts past the ink still shows it through its blur,
+/// so the shown part is measured on the blurred mask, not on the mask's own pixels.
+#[test]
+fn a_feathered_opening_beside_the_ink_still_shows_it() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 15, "y": 0, "width": 25, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    s.edit("feather", |d, _| {
+        d.layer_mut(paint).and_then(|l| l.mask.as_mut()).expect("mask").feather = 3.0;
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    // The blur reaches back over the whole square (x 4..14), which is centred as a whole, rather
+    // than the source canvas's centre standing in for an empty measure.
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 35, 30));
+}
+
 #[test]
 fn a_copied_background_is_an_ordinary_layer_and_several_layers_keep_their_order() {
     let (mut s, paint) = two_docs(40, 30, 8);

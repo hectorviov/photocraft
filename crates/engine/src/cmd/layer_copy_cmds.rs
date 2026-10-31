@@ -72,27 +72,56 @@ fn shown_bounds(l: &Layer) -> Option<Rect> {
         Some(m) => {
             // Ink: the layer's own alpha. Effects reach past it, so a layer with them uses the mask alone.
             let ink = l.surface().filter(|s| s.format().alpha && !photocraft_compose::effects::has_effects(l));
+            let n = ink.map_or(0, |s| s.channels());
             let (mut mask_row, mut ink_row) = (Vec::new(), Vec::new());
-            let (w, n) = (r.width() as usize, ink.map_or(0, |s| s.channels()));
-            let mut shown = Rect::EMPTY;
-            // A row at a time, so a large sparse layer never needs its whole rectangle in memory.
-            for y in r.y0..r.y1 {
-                let row = Rect::new(r.x0, y, r.x1, y.saturating_add(1));
-                m.surface.read_region_into(row, &mut mask_row);
-                if let Some(s) = ink {
-                    s.read_region_into(row, &mut ink_row);
+            // The x span of row `y` of `area` where `hit(i)` holds for sample `i`, as a 1-row rect.
+            let span = |area: Rect, y: i32, hit: &dyn Fn(usize) -> bool| {
+                let w = area.width() as usize;
+                let (a, b) = ((0..w).find(|i| hit(*i))?, (0..w).rev().find(|i| hit(*i))?);
+                let (a, b) = (area.x0.saturating_add(a as i32), area.x0.saturating_add(b as i32));
+                Some(Rect::new(a, y, b.saturating_add(1), y.saturating_add(1)))
+            };
+            // Rows one at a time, so a large sparse layer never needs its whole rectangle in memory.
+            let row = |y: i32, area: Rect| Rect::new(area.x0, y, area.x1, y.saturating_add(1));
+            if m.feather.is_finite() && m.feather > 0.0 {
+                // A feathered mask shows pixels as far as the compositor carries its blur, from
+                // mask samples inside the layer's bounds or within that reach of them.
+                let sigma = photocraft_vector::feather::feather_sigma(m.feather);
+                let reach = photocraft_vector::feather::grow(r, sigma);
+                let mut open = Rect::EMPTY;
+                for y in reach.y0..reach.y1 {
+                    m.surface.read_region_into(row(y, reach), &mut mask_row);
+                    if let Some(sp) = span(reach, y, &|i| mask_row[i] > 0.0) {
+                        open = open.union(&sp);
+                    }
                 }
-                let seen = |i: &usize| mask_row[*i] > 0.0 && ink.is_none_or(|_| ink_row[i * n + n - 1] > 0.0);
-                if let (Some(a), Some(b)) = ((0..w).find(seen), (0..w).rev().find(seen)) {
-                    let (a, b) = (r.x0.saturating_add(a as i32), r.x0.saturating_add(b as i32));
-                    shown = shown.union(&Rect::new(a, y, b.saturating_add(1), y.saturating_add(1)));
+                let lit = if open.is_empty() { open } else { photocraft_vector::feather::grow(open, sigma).intersect(&r) };
+                match ink {
+                    Some(s) if !lit.is_empty() => {
+                        let mut shown = Rect::EMPTY;
+                        for y in lit.y0..lit.y1 {
+                            s.read_region_into(row(y, lit), &mut ink_row);
+                            if let Some(sp) = span(lit, y, &|i| ink_row[i * n + n - 1] > 0.0) {
+                                shown = shown.union(&sp);
+                            }
+                        }
+                        shown
+                    }
+                    _ => lit,
                 }
-            }
-            // A feathered edge reveals as far as the compositor carries its blur; a hard one doesn't.
-            if shown.is_empty() || !m.feather.is_finite() || m.feather <= 0.0 {
-                shown
             } else {
-                photocraft_vector::feather::grow(shown, photocraft_vector::feather::feather_sigma(m.feather)).intersect(&r)
+                // A hard mask: the pixels it reveals that hold ink.
+                let mut shown = Rect::EMPTY;
+                for y in r.y0..r.y1 {
+                    m.surface.read_region_into(row(y, r), &mut mask_row);
+                    if let Some(s) = ink {
+                        s.read_region_into(row(y, r), &mut ink_row);
+                    }
+                    if let Some(sp) = span(r, y, &|i| mask_row[i] > 0.0 && ink.is_none_or(|_| ink_row[i * n + n - 1] > 0.0)) {
+                        shown = shown.union(&sp);
+                    }
+                }
+                shown
             }
         }
         None => r,
