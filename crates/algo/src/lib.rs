@@ -841,8 +841,8 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         }
         FilterParams::TraceContour { level, upper } => stylize2::trace_contour(src, out, ctx, *level, *upper),
         FilterParams::Wind { method, from_right, seed } => stylize2::wind(src, out, ctx, *method, *from_right, *seed),
-        FilterParams::Displace { horizontal, vertical, stretch, undefined, map, map_8bit } => {
-            distort2::displace(src, out, ctx, (*horizontal, *vertical), *stretch, *undefined, map.as_deref(), *map_8bit)
+        FilterParams::Displace { horizontal, vertical, stretch, map, map_8bit, .. } => {
+            distort2::displace(src, out, ctx, (*horizontal, *vertical), *stretch, map.as_deref(), *map_8bit)
         }
         FilterParams::Shear { points, undefined } => distort2::shear(src, out, ctx, points, *undefined),
         FilterParams::ZigZag { amount, ridges, style } => distort2::zigzag(src, out, ctx, *amount, *ridges, *style),
@@ -1027,6 +1027,15 @@ fn auto_tile(params: &FilterParams, bounds: Rect) -> i32 {
     }
 }
 
+/// The pixels a global filter reads for `area`: the bounds and the area, or for Displace the
+/// pixels its map can reach.
+pub(crate) fn global_source(surface: &Surface, params: &FilterParams, area: Rect, bounds: Rect) -> Image {
+    match *params {
+        FilterParams::Displace { horizontal, vertical, undefined, .. } => distort2::displace_source(surface, area, bounds, (horizontal, vertical), undefined),
+        _ => Image::read(surface, bounds.union(&area)),
+    }
+}
+
 /// [`apply`] / [`apply_in`] with an explicit tile size (tests use it to check tile independence).
 /// Nonpositive tile sizes are treated as one pixel.
 pub fn apply_tiled(
@@ -1129,7 +1138,7 @@ fn apply_tiled_with_impl(
             return None;
         }
     }
-    let shared = (halo == Halo::Bounds).then(|| Image::read(surface, bounds.union(&area)));
+    let shared = (halo == Halo::Bounds).then(|| global_source(surface, params, area, bounds));
     // A Filter Gallery stack with a Cutout traces the whole image once; tiles only fill it in.
     let gallery = match (params, &shared) {
         (FilterParams::FilterGallery { effects }, Some(src)) => artistic_fx::Prepared::new(effects, src, &ctx),
@@ -1210,7 +1219,7 @@ fn apply_tiled_with_impl(
             }
             // `shared` is always read for global filters; read the same image if it weren't.
             (None, Halo::Bounds) => {
-                owned = Image::read(surface, bounds.union(&area));
+                owned = global_source(surface, params, area, bounds);
                 &owned
             }
         };
