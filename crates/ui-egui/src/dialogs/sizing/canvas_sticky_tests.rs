@@ -138,9 +138,10 @@ fn a_run_without_a_colour_opens_the_dialog_on_the_background() {
 #[test]
 fn a_canvas_size_action_step_sets_the_colour_the_dialog_opens_on() {
     use craft::automation::actions::{Action, ActionStep};
+    use photocraft_engine::actions_cmds::ActionsExt as _;
     let mut app = app();
     let step = ActionStep::from(("image.canvasSize".to_string(), json!({"width": 420, "height": 320, "anchor": "center", "extensionColor": "black"})));
-    app.session.actions.list.push(Action::new("Size", vec![step])).expect("a new name");
+    app.session.actions_mut().list.push(Action::new("Size", vec![step])).expect("a new name");
     let played = app.run("actions.play", json!({"action": 0})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
     let id = open(&mut app);
